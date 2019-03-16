@@ -1,3 +1,7 @@
+.project
+.settings/
+.vscode/
+
 .gradle/
 *-merged.jar
 *-mapped.jar

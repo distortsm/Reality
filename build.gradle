@@ -22,13 +22,17 @@ plugins {
 	id 'maven-publish'
 }
 
-def minecraft_version = "19w11b"
+def starmade_version = project.hasProperty("starMadeVersion")
+	? project.starMadeVersion
+	: "0.201.364"
+
+logger.lifecycle(": Targeting StarMade $starmade_version")
 
 def ENV = System.getenv()
 // Fetch build number from Jenkins
 def build_number = ENV.BUILD_NUMBER ?: "local"
 
-def yarnVersion = "${minecraft_version}.$build_number"
+def yarnVersion = "${starmade_version}.$build_number"
 
 
 repositories {
@@ -54,16 +58,16 @@ dependencies {
 }
 
 def mappingsDir = file("mappings")
-def cacheFilesMinecraft = file(".gradle/minecraft")
+def cacheFilesStarMade = file(".gradle/starmade")
 def tempDir = file(".gradle/temp")
-def mergedFile = file("${minecraft_version}-merged.jar")
-def intermediaryJar = file("${minecraft_version}-intermediary.jar")
-def namedJar = file("${minecraft_version}-named.jar")
-def versionFile = new File(cacheFilesMinecraft, "${minecraft_version}.json")
-def clientJar = new File(cacheFilesMinecraft, "${minecraft_version}-client.jar")
-def serverJar = new File(cacheFilesMinecraft, "${minecraft_version}-server.jar")
-def libraries = new File(cacheFilesMinecraft, "${minecraft_version}-libraries")
+def intermediaryJar = file("${starmade_version}-intermediary.jar")
+def namedJar = file("${starmade_version}-named.jar")
+def checksumsFile = new File(cacheFilesStarMade, "${starmade_version}_checksums.lst")
+def gameJar = new File(cacheFilesStarMade, "${starmade_version}.jar")
+def libraries = new File(cacheFilesStarMade, "${starmade_version}-libraries")
 def libs = new File("build/libs/")
+
+ext.baseUrl = new URL("http://files.star-made.org/")
 
 import groovy.json.JsonSlurper
 import org.apache.commons.io.FileUtils
@@ -92,99 +96,88 @@ boolean validateChecksum(File file, String checksum) {
 }
 
 task downloadVersionsManifest {
-	//inputs.property "mc_ver", minecraft_version
+	inputs.property "sm_ver", starmade_version
 	inputs.property "currenttime", new Date()
-	def manifestFile = new File(cacheFilesMinecraft, "version_manifest.json")
+	def manifestFile = new File(cacheFilesStarMade, "release_version_manifest.lst")
 	outputs.file(manifestFile)
 	doLast {
-		logger.lifecycle(":downloading minecraft versions manifest")
-		FileUtils.copyURLToFile(new URL("https://launchermeta.mojang.com/mc/game/version_manifest.json"), manifestFile)
+		logger.lifecycle(":downloading starmade release versions manifest")
+		FileUtils.copyURLToFile(new URL(baseUrl, "/releasebuildindex"), manifestFile)
 	}
 }
 
-def getManifestVersion(File manifestFile, String minecraft_version) {
-	def manifest = manifestFile.exists() ? new JsonSlurper().parseText(FileUtils.readFileToString(manifestFile)) : null
-	return manifest != null ? manifest.versions.stream().filter({it.id.equals(minecraft_version)}).findFirst() : java.util.Optional.empty()
+def getManifestVersion(File manifestFile, String starmade_version) {
+	def manifest = manifestFile.exists() ? FileUtils.readLines(manifestFile, "UTF-8") : null
+	def tokens = manifest != null ?
+		manifest.stream().findAll({it.startsWith(starmade_version + "#") ? it : null}).last().tokenize(' ')
+		: null
+	if (tokens == null)
+		return java.util.Optional.empty()
+
+	def build_id = tokens[0].split('#')
+	return java.util.Optional.of([
+			version: build_id[0],
+			build: build_id[1],
+			path: tokens[1],
+			checksums: new URL(baseUrl, "${tokens[1]}/checksums")
+		])
 }
 
 task downloadWantedVersionManifest(dependsOn: downloadVersionsManifest) {
 	def manifestFile = downloadVersionsManifest.outputs.files.singleFile
-	def manifestVersion = getManifestVersion(manifestFile, minecraft_version)
+	def manifestVersion = getManifestVersion(manifestFile, starmade_version)
 
 	//have to grab the release time as there's a current timestamp on each element?!
-	inputs.property "releaseTime", manifestVersion.isPresent() ? manifestVersion.get().releaseTime : -1
+	inputs.property "releaseTime", manifestVersion.isPresent() ? manifestVersion.get().build : -1
+	inputs.property "downloadBaseUrl", manifestVersion.isPresent() ? new URL(baseUrl, manifestVersion.get().path) : null
 
-	outputs.file versionFile
+	outputs.file checksumsFile
 
 	doLast {
-		manifestVersion = getManifestVersion(manifestFile, minecraft_version) //nb need to re-read here in case it didn't exist before
-		if (manifestVersion.isPresent() || versionFile.exists()) {
+		manifestVersion = getManifestVersion(manifestFile, starmade_version) //nb need to re-read here in case it didn't exist before
+		if (manifestVersion.isPresent() || checksumsFile.exists()) {
 
 			if (manifestVersion.isPresent()) {
-				FileUtils.copyURLToFile(new URL(manifestVersion.get().url), versionFile)
+				FileUtils.copyURLToFile(manifestVersion.get().checksums, checksumsFile)
 			}
 		} else {
-			throw new RuntimeException("No version data for Minecraft version ${minecraft_version}")
+			throw new RuntimeException("No version data for Minecraft version ${starmade_version}")
 		}
 	}
 
 }
 
-task downloadMcJars(dependsOn: downloadWantedVersionManifest) {
+task downloadStarMadeJars(dependsOn: downloadWantedVersionManifest) {
+	def manifestFile = downloadVersionsManifest.outputs.files.singleFile
+	def manifestVersion = getManifestVersion(manifestFile, starmade_version)
 
-	inputs.files versionFile
+	inputs.files checksumsFile
 
-	outputs.files(clientJar, serverJar)
+	outputs.files(gameJar)
 
 	outputs.upToDateWhen {
-		def version = new JsonSlurper().parseText(FileUtils.readFileToString(versionFile))
-		return clientJar.exists() && serverJar.exists() && validateChecksum(clientJar, version.downloads.client.sha1) && validateChecksum(serverJar, version.downloads.server.sha1)
+		def version = FileUtils.readLines(checksumsFile, "UTF-8")
+		def sha1 = version.stream().findResult({it.startsWith("./StarMade.jar ") ? it : null}).tokenize(" ")[2]
+		return gameJar.exists() && validateChecksum(gameJar, sha1)
 	}
 
 	doLast {
-		if (!versionFile.exists()) {
-			throw new RuntimeException("Can't download the jars without the ${versionFile.name} file!")
+		if (!checksumsFile.exists()) {
+			throw new RuntimeException("Can't download the jars without the ${checksumsFile.name} file!")
 		}
 
 		//reload in case it changed
-		def version = new JsonSlurper().parseText(FileUtils.readFileToString(versionFile))
+		def version = FileUtils.readLines(checksumsFile)
+		def sha1 = version.stream().findResult({it.startsWith("./StarMade.jar ") ? it : null}).tokenize(" ")[2]
 
-		logger.lifecycle(":downloading minecraft jars")
-
-		if (!clientJar.exists() || !validateChecksum(clientJar, version.downloads.client.sha1)) {
-			logger.lifecycle(":downloading minecraft client")
-			FileUtils.copyURLToFile(new URL(version.downloads.client.url), clientJar)
-		}
-
-		if (!serverJar.exists() || !validateChecksum(serverJar, version.downloads.server.sha1)) {
-			logger.lifecycle(":downloading minecraft server")
-			FileUtils.copyURLToFile(new URL(version.downloads.server.url), serverJar)
+		if (!gameJar.exists() || !validateChecksum(gameJar, sha1)) {
+			logger.lifecycle(":downloading StarMade.jar ($sha1)")
+			FileUtils.copyURLToFile(new URL(baseUrl, "${manifestVersion.get().path}/StarMade.jar"), gameJar)
 		}
 	}
 }
 
-task mergeJars(dependsOn: downloadMcJars) {
-	inputs.files downloadMcJars.outputs.files.files
-	outputs.file(mergedFile)
-
-	doLast {
-		logger.lifecycle(":merging jars")
-		def client = inputs.files.files.find {it.name.endsWith("-client.jar")}
-		def server = inputs.files.files.find {it.name.endsWith("-server.jar")}
-		def merged = mergedFile
-
-		if(merged.exists()){
-			return
-		}
-
-		def jarMerger = new JarMerger(client, server, merged)
-		jarMerger.merge()
-		jarMerger.close()
-	}
-
-}
-
-task setupYarn(dependsOn: mergeJars) {
+task setupYarn(dependsOn: downloadStarMadeJars) {
 
 }
 
@@ -196,7 +189,7 @@ task yarn(dependsOn: setupYarn) {
 			fork: true,
 			spawn: true
 		) {
-			arg(value: mergedFile.getAbsolutePath())
+			arg(value: gameJar.getAbsolutePath())
 			arg(value: mappingsDir.getAbsolutePath())
 		}
 	}
@@ -215,7 +208,7 @@ task checkMappings {
 		logger.lifecycle(":checking mappings")
 
 		String[] args = [
-			mergedFile.getAbsolutePath(),
+			gameJar.getAbsolutePath(),
 			mappingsDir.getAbsolutePath()
 		]
 
@@ -224,11 +217,11 @@ task checkMappings {
 }
 
 task downloadIntermediary(type: Download){
-    src "https://github.com/FabricMC/intermediary/raw/master/mappings/${minecraft_version}.tiny"
-    dest new File(cacheFilesMinecraft, "${minecraft_version}-intermediary.tiny")
+	src "https://github.com/DistortSM/intermediary/raw/master/mappings/${starmade_version}.tiny"
+	dest new File(cacheFilesStarMade, "${starmade_version}-intermediary.tiny")
 }
 
-task buildYarnTiny(dependsOn: "mergeJars",type: FileOutput) {
+task buildYarnTiny(dependsOn: "downloadStarMadeJars", type: FileOutput) {
 	inputs.dir mappingsDir
 	if (!libs.exists()) {
 		libs.mkdirs()
@@ -236,14 +229,14 @@ task buildYarnTiny(dependsOn: "mergeJars",type: FileOutput) {
 
 	def yarnTiny = new File(tempDir, "yarn-mappings.tiny")
 	fileOutput = yarnTiny
-	
+
 	outputs.upToDateWhen {return false}
 
 	doLast {
 		logger.lifecycle(":generating tiny mappings")
 
 		String[] args = [
-			mergedFile.getAbsolutePath(),
+			gameJar.getAbsolutePath(),
 			mappingsDir.getAbsolutePath(),
 			yarnTiny.getAbsolutePath(),
 			"official",
@@ -318,7 +311,7 @@ task compressTiny(dependsOn: ["tinyJar", "mergeTiny"], type: FileOutput){
 }
 
 clean.doFirst {
-	delete tempDir, cacheFilesMinecraft
+	delete tempDir, cacheFilesStarMade
 }
 
 tasks.build.dependsOn "compressTiny"
@@ -326,7 +319,7 @@ tasks.build.dependsOn "buildEnigma"
 tasks.build.dependsOn "tinyJar"
 
 task downloadMcLibs(dependsOn: downloadWantedVersionManifest) {
-	inputs.files versionFile
+	inputs.files checksumsFile
 
 	outputs.file(libraries)
 
@@ -335,11 +328,11 @@ task downloadMcLibs(dependsOn: downloadWantedVersionManifest) {
 	}
 
 	doLast {
-		if (!versionFile.exists()) {
-			throw new RuntimeException("Can't download the jars without the ${versionFile.name} file!")
+		if (!checksumsFile.exists()) {
+			throw new RuntimeException("Can't download the jars without the ${checksumsFile.name} file!")
 		}
 
-		def version = new JsonSlurper().parseText(FileUtils.readFileToString(versionFile))
+		def version = new JsonSlurper().parseText(FileUtils.readFileToString(checksumsFile))
 
 		logger.lifecycle(":downloading minecraft libraries")
 
@@ -371,7 +364,7 @@ task mapIntermediaryJar(dependsOn: [downloadMcLibs, build]) {
 	doLast {
 		logger.lifecycle(":mapping minecraft to intermdiary")
 		def tinyInput = new File("build/libs/yarn-tiny-${yarnVersion}.gz")
-		mapJar(intermediaryJar, mergedFile, tinyInput, libraries, "official", "intermediary")
+		mapJar(intermediaryJar, gameJar, tinyInput, libraries, "official", "intermediary")
 	}
 }
 
@@ -433,7 +426,7 @@ void mapJar(File output, File input, File mappings, File libraries, String from,
 		.renameInvalidLocals(true)
 		.rebuildSourceFilenames(true)
 		.build()
-      
+
 	try {
 		def outputConsumer = new OutputConsumerPath(output.toPath())
 		outputConsumer.addNonClassFiles(input.toPath())
