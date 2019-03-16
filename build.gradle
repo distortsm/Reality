@@ -82,6 +82,7 @@ import net.fabricmc.weave.CommandTinyify
 import net.fabricmc.weave.CommandFindMappingErrors
 import groovy.io.FileType
 import java.util.zip.GZIPOutputStream
+import java.util.stream.Collectors
 
 boolean validateChecksum(File file, String checksum) {
 	if (file != null) {
@@ -319,6 +320,9 @@ tasks.build.dependsOn "buildEnigma"
 tasks.build.dependsOn "tinyJar"
 
 task downloadMcLibs(dependsOn: downloadWantedVersionManifest) {
+	def manifestFile = downloadVersionsManifest.outputs.files.singleFile
+	def manifestVersion = getManifestVersion(manifestFile, starmade_version)
+
 	inputs.files checksumsFile
 
 	outputs.file(libraries)
@@ -332,22 +336,24 @@ task downloadMcLibs(dependsOn: downloadWantedVersionManifest) {
 			throw new RuntimeException("Can't download the jars without the ${checksumsFile.name} file!")
 		}
 
-		def version = new JsonSlurper().parseText(FileUtils.readFileToString(checksumsFile))
+		def version = FileUtils.readLines(checksumsFile)
+		def build_url = new URL(baseUrl, manifestVersion.get().path)
 
-		logger.lifecycle(":downloading minecraft libraries")
+		logger.lifecycle(": Downloading StarMade libraries")
 
 		if (!libraries.exists()) {
 			libraries.mkdirs()
 		}
 
-		version.libraries.each {
-			def downloadUrl = it.downloads.artifact.url
+		def libraryUrls = version.stream()
+			.map { new URL(build_url, "${build_url.getPath()}/${it.tokenize(" ")[0]}").toString() }
+			.filter { it.endsWith(".jar") }
+			.collect Collectors.toList()
 
-			download {
-				src downloadUrl
-				dest new File(libraries, downloadUrl.substring(downloadUrl.lastIndexOf("/") + 1))
-				overwrite false
-			}
+		download {
+			src libraryUrls
+			dest libraries
+			overwrite false
 		}
 	}
 }
