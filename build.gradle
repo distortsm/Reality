@@ -347,7 +347,7 @@ task downloadStarMadeLibs(dependsOn: downloadWantedVersionManifest) {
 
 		def libraryUrls = version.stream()
 			.map { new URL(build_url, "${build_url.getPath()}/${it.tokenize(" ")[0]}").toString() }
-			.filter { it.endsWith(".jar") }
+			.filter { it.endsWith(".jar") && !it.endsWith("./StarMade.jar") }
 			.collect Collectors.toList()
 
 		download {
@@ -360,7 +360,7 @@ task downloadStarMadeLibs(dependsOn: downloadWantedVersionManifest) {
 
 		version.stream()
 			.map { it.tokenize(" ") }
-			.filter { it[0].endsWith(".jar") }
+			.filter { it[0].endsWith(".jar") && !it[0].equals("./StarMade.jar") }
 			.each {
 				def library = new File(libraries, it[0].substring(it[0].lastIndexOf("/") + 1))
 				def libraryChecksum = it[2]
