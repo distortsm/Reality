@@ -319,7 +319,7 @@ tasks.build.dependsOn "compressTiny"
 tasks.build.dependsOn "buildEnigma"
 tasks.build.dependsOn "tinyJar"
 
-task downloadMcLibs(dependsOn: downloadWantedVersionManifest) {
+task downloadStarMadeLibs(dependsOn: downloadWantedVersionManifest) {
 	def manifestFile = downloadVersionsManifest.outputs.files.singleFile
 	def manifestVersion = getManifestVersion(manifestFile, starmade_version)
 
@@ -355,11 +355,27 @@ task downloadMcLibs(dependsOn: downloadWantedVersionManifest) {
 			dest libraries
 			overwrite false
 		}
+
+		logger.lifecycle(": Verifying StarMade library checksums")
+
+		version.stream()
+			.map { it.tokenize(" ") }
+			.filter { it[0].endsWith(".jar") }
+			.each {
+				def library = new File(libraries, it[0].substring(it[0].lastIndexOf("/") + 1))
+				def libraryChecksum = it[2]
+
+				verifyChecksum {
+					src library
+					algorithm "sha1"
+					checksum libraryChecksum
+				}
+			}
 	}
 }
 
-task mapIntermediaryJar(dependsOn: [downloadMcLibs, build]) {
-	inputs.files downloadMcLibs.outputs.files.files
+task mapIntermediaryJar(dependsOn: [downloadStarMadeLibs, build]) {
+	inputs.files downloadStarMadeLibs.outputs.files.files
 	outputs.file(intermediaryJar)
 
 	//Force the task to always run
@@ -375,7 +391,7 @@ task mapIntermediaryJar(dependsOn: [downloadMcLibs, build]) {
 }
 
 task mapNamedJar(dependsOn: mapIntermediaryJar) {
-	inputs.files downloadMcLibs.outputs.files.files
+	inputs.files downloadStarMadeLibs.outputs.files.files
 	outputs.file(namedJar)
 
 	//Force the task to always run
