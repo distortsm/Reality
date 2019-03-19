@@ -22,17 +22,13 @@ plugins {
 	id 'maven-publish'
 }
 
-def starmade_version = project.hasProperty("starMadeVersion")
-	? project.starMadeVersion
-	: "0.201.364"
-
-logger.lifecycle(": Targeting StarMade $starmade_version")
+logger.lifecycle(": Targeting StarMade $project.starMadeVersion")
 
 def ENV = System.getenv()
 // Fetch build number from Jenkins
 def build_number = ENV.BUILD_NUMBER ?: "local"
 
-def yarnVersion = "${starmade_version}.$build_number"
+def yarnVersion = "${project.starMadeVersion}.$build_number"
 
 
 repositories {
@@ -60,11 +56,11 @@ dependencies {
 def mappingsDir = file("mappings")
 def cacheFilesStarMade = file(".gradle/starmade")
 def tempDir = file(".gradle/temp")
-def intermediaryJar = file("${starmade_version}-intermediary.jar")
-def namedJar = file("${starmade_version}-named.jar")
-def checksumsFile = new File(cacheFilesStarMade, "${starmade_version}_checksums.lst")
-def gameJar = new File(cacheFilesStarMade, "${starmade_version}.jar")
-def libraries = new File(cacheFilesStarMade, "${starmade_version}-libraries")
+def intermediaryJar = file("${project.starMadeVersion}-intermediary.jar")
+def namedJar = file("${project.starMadeVersion}-named.jar")
+def checksumsFile = new File(cacheFilesStarMade, "${project.starMadeVersion}_checksums.lst")
+def gameJar = new File(cacheFilesStarMade, "${project.starMadeVersion}.jar")
+def libraries = new File(cacheFilesStarMade, "${project.starMadeVersion}-libraries")
 def libs = new File("build/libs/")
 
 ext.baseUrl = new URL("http://files.star-made.org/")
@@ -96,25 +92,34 @@ boolean validateChecksum(File file, String checksum) {
 	return false
 }
 
-task downloadVersionsManifest {
-	inputs.property "sm_ver", starmade_version
-	inputs.property "currenttime", new Date()
+task downloadVersionsManifest(type: Download) {
+	inputs.property "date", java.time.LocalDate.now()
+
 	def manifestFile = new File(cacheFilesStarMade, "release_version_manifest.lst")
-	outputs.file(manifestFile)
-	doLast {
-		logger.lifecycle(":downloading starmade release versions manifest")
-		FileUtils.copyURLToFile(new URL(baseUrl, "/releasebuildindex"), manifestFile)
-	}
+
+	src new URL(baseUrl, "/releasebuildindex")
+	dest manifestFile
+	onlyIfModified true
 }
 
 def getManifestVersion(File manifestFile, String starmade_version) {
-	def manifest = manifestFile.exists() ? FileUtils.readLines(manifestFile, "UTF-8") : null
-	def tokens = manifest != null ?
-		manifest.stream().findAll({it.startsWith(starmade_version + "#") ? it : null}).last().tokenize(' ')
-		: null
-	if (tokens == null)
+	if (!manifestFile.exists()) {
+		logger.info("! manifestFile ($manifestFile) does not exist")
 		return java.util.Optional.empty()
+	}
 
+	def manifest = FileUtils.readLines(manifestFile, "UTF-8")
+	def builds = manifest.stream()
+		.filter { it.startsWith("$starmade_version#") }
+		.map { it.tokenize(' ') }
+		.collect Collectors.toList()
+
+	if (builds.isEmpty()) {
+		logger.info("! No builds were availble for version $starmade_version")
+		return java.util.Optional.empty()
+	}
+
+	def tokens = builds.last()
 	def build_id = tokens[0].split('#')
 	return java.util.Optional.of([
 			version: build_id[0],
@@ -125,44 +130,42 @@ def getManifestVersion(File manifestFile, String starmade_version) {
 }
 
 task downloadWantedVersionManifest(dependsOn: downloadVersionsManifest) {
-	def manifestFile = downloadVersionsManifest.outputs.files.singleFile
-	def manifestVersion = getManifestVersion(manifestFile, starmade_version)
-
-	//have to grab the release time as there's a current timestamp on each element?!
-	inputs.property "releaseTime", manifestVersion.isPresent() ? manifestVersion.get().build : -1
-	inputs.property "downloadBaseUrl", manifestVersion.isPresent() ? new URL(baseUrl, manifestVersion.get().path) : null
+	def manifestFile = downloadVersionsManifest.dest
 
 	outputs.file checksumsFile
 
 	doLast {
-		manifestVersion = getManifestVersion(manifestFile, starmade_version) //nb need to re-read here in case it didn't exist before
-		if (manifestVersion.isPresent() || checksumsFile.exists()) {
+		def manifestVersion = getManifestVersion(manifestFile, project.starMadeVersion)
 
-			if (manifestVersion.isPresent()) {
-				FileUtils.copyURLToFile(manifestVersion.get().checksums, checksumsFile)
+		if (manifestVersion.isPresent()) {
+			download {
+				src manifestVersion.get().checksums
+				dest checksumsFile
+				onlyIfModified true
 			}
 		} else {
-			throw new RuntimeException("No version data for Minecraft version ${starmade_version}")
+			throw new RuntimeException("No version data for StarMade version ${project.starMadeVersion}")
 		}
 	}
 
 }
 
 task downloadStarMadeJars(dependsOn: downloadWantedVersionManifest) {
-	def manifestFile = downloadVersionsManifest.outputs.files.singleFile
-	def manifestVersion = getManifestVersion(manifestFile, starmade_version)
+	def manifestFile = downloadVersionsManifest.dest
 
-	inputs.files checksumsFile
+	inputs.file checksumsFile
 
-	outputs.files(gameJar)
+	outputs.file gameJar
 
 	outputs.upToDateWhen {
 		def version = FileUtils.readLines(checksumsFile, "UTF-8")
-		def sha1 = version.stream().findResult({it.startsWith("./StarMade.jar ") ? it : null}).tokenize(" ")[2]
+		def sha1 = version.stream().findResult { it.startsWith("./StarMade.jar ") ? it : null }.tokenize(" ")[2]
 		return gameJar.exists() && validateChecksum(gameJar, sha1)
 	}
 
 	doLast {
+		def manifestVersion = getManifestVersion(manifestFile, project.starMadeVersion)
+
 		if (!checksumsFile.exists()) {
 			throw new RuntimeException("Can't download the jars without the ${checksumsFile.name} file!")
 		}
@@ -171,9 +174,11 @@ task downloadStarMadeJars(dependsOn: downloadWantedVersionManifest) {
 		def version = FileUtils.readLines(checksumsFile)
 		def sha1 = version.stream().findResult({it.startsWith("./StarMade.jar ") ? it : null}).tokenize(" ")[2]
 
-		if (!gameJar.exists() || !validateChecksum(gameJar, sha1)) {
-			logger.lifecycle(":downloading StarMade.jar ($sha1)")
-			FileUtils.copyURLToFile(new URL(baseUrl, "${manifestVersion.get().path}/StarMade.jar"), gameJar)
+		download {
+			logger.lifecycle(": Downloading StarMade.jar ($sha1)")
+
+			src new URL(baseUrl, "${manifestVersion.get().path}/StarMade.jar")
+			dest gameJar
 		}
 	}
 }
@@ -190,6 +195,7 @@ task yarn(dependsOn: setupYarn) {
 			fork: true,
 			spawn: true
 		) {
+			jvmarg(value: "-Xmx2048m")
 			arg(value: gameJar.getAbsolutePath())
 			arg(value: mappingsDir.getAbsolutePath())
 		}
@@ -218,8 +224,8 @@ task checkMappings {
 }
 
 task downloadIntermediary(type: Download){
-	src "https://github.com/DistortSM/intermediary/raw/master/mappings/${starmade_version}.tiny"
-	dest new File(cacheFilesStarMade, "${starmade_version}-intermediary.tiny")
+	src "https://github.com/DistortSM/intermediary/raw/master/mappings/${project.starMadeVersion}.tiny"
+	dest new File(cacheFilesStarMade, "${project.starMadeVersion}-intermediary.tiny")
 }
 
 task buildYarnTiny(dependsOn: "downloadStarMadeJars", type: FileOutput) {
@@ -320,8 +326,7 @@ tasks.build.dependsOn "buildEnigma"
 tasks.build.dependsOn "tinyJar"
 
 task downloadStarMadeLibs(dependsOn: downloadWantedVersionManifest) {
-	def manifestFile = downloadVersionsManifest.outputs.files.singleFile
-	def manifestVersion = getManifestVersion(manifestFile, starmade_version)
+	def manifestFile = downloadVersionsManifest.dest
 
 	inputs.files checksumsFile
 
@@ -332,6 +337,7 @@ task downloadStarMadeLibs(dependsOn: downloadWantedVersionManifest) {
 	}
 
 	doLast {
+		def manifestVersion = getManifestVersion(manifestFile, project.starMadeVersion)
 		if (!checksumsFile.exists()) {
 			throw new RuntimeException("Can't download the jars without the ${checksumsFile.name} file!")
 		}
@@ -376,7 +382,7 @@ task downloadStarMadeLibs(dependsOn: downloadWantedVersionManifest) {
 
 task mapIntermediaryJar(dependsOn: [downloadStarMadeLibs, build]) {
 	inputs.files downloadStarMadeLibs.outputs.files.files
-	outputs.file(intermediaryJar)
+	outputs.file intermediaryJar
 
 	//Force the task to always run
 	outputs.upToDateWhen {
@@ -384,7 +390,7 @@ task mapIntermediaryJar(dependsOn: [downloadStarMadeLibs, build]) {
 	}
 
 	doLast {
-		logger.lifecycle(":mapping minecraft to intermdiary")
+		logger.lifecycle(": Mapping StarMade to intermdiary")
 		def tinyInput = new File("build/libs/yarn-tiny-${yarnVersion}.gz")
 		mapJar(intermediaryJar, gameJar, tinyInput, libraries, "official", "intermediary")
 	}
