@@ -1,4 +1,4 @@
 CLASS obfuscated/aFQ org/schema/game/common/controller/elements/mines/MineType
-	FIELD a CANNON Lobfuscated/aFO;
-	FIELD b MISSILE Lobfuscated/aFO;
-	FIELD c PROXIMITY Lobfuscated/aFO;
+	FIELD a CANNON Lobfuscated/aFQ;
+	FIELD b MISSILE Lobfuscated/aFQ;
+	FIELD c PROXIMITY Lobfuscated/aFQ;
