@@ -1,0 +1,4 @@
+CLASS obfuscated/brQ org/schema/game/client/event/MouseButton
+	FIELD a LEFT Lobfuscated/brQ;
+	FIELD b RIGHT Lobfuscated/brQ;
+	FIELD c MIDDLE Lobfuscated/brQ;
