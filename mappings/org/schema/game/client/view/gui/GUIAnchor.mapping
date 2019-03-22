@@ -1,0 +1,4 @@
+CLASS obfuscated/bvC org/schema/game/client/view/gui/GUIAnchor
+	METHOD <init> (Lobfuscated/bEM;FF)V
+		ARG 2 width
+		ARG 3 height
