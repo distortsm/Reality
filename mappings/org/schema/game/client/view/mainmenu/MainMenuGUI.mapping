@@ -1,3 +1,4 @@
 CLASS obfuscated/ags org/schema/game/client/view/mainmenu/MainMenuGUI
 	FIELD a buttons Ljava/util/List;
+	METHOD a getMainMenuController ()Lobfuscated/an;
 	METHOD a showDialog (Lobfuscated/ags;)V

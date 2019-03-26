@@ -1,0 +1,6 @@
+CLASS obfuscated/oY org/schema/game/client/view/gui/InputPanel
+	FIELD a cancelButton Lobfuscated/bvQ;
+	FIELD a primaryButton Lobfuscated/bwp;
+	FIELD a window Lobfuscated/bze;
+	FIELD b secondaryButton Lobfuscated/bwp;
+	METHOD a attachToParent (Z)V

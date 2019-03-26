@@ -1,1 +1,2 @@
 CLASS obfuscated/ac org/schema/game/client/controller/GameClientController
+	METHOD d initialize ()V
