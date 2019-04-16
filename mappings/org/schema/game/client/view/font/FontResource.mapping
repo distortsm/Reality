@@ -1,2 +1,2 @@
-CLASS obfuscated/bvp org/schema/game/client/view/font/FontResource
+CLASS obfuscated/bvs org/schema/game/client/view/font/FontResource
 	METHOD a getFontMetrics (Lorg/newdawn/slick/UnicodeFont;)Ljava/awt/FontMetrics;

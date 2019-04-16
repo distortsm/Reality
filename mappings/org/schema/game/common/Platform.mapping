@@ -1,10 +1,5 @@
 CLASS obfuscated/T org/schema/game/common/Platform
-	FIELD a LINUX Lobfuscated/T;
 	FIELD a identifiers [Ljava/lang/String;
-	FIELD b SOLARIS Lobfuscated/T;
-	FIELD c WINDOWS Lobfuscated/T;
-	FIELD d MAC Lobfuscated/T;
-	FIELD e UNKNOWN Lobfuscated/T;
 	FIELD f platform Lobfuscated/T;
 	METHOD a getConfigurationDirectory ()Ljava/io/File;
 	METHOD a getPlatform ()Lobfuscated/T;

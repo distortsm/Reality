@@ -1,2 +1,2 @@
-CLASS obfuscated/bHl org/schema/schine/resource/ResourceLoader
+CLASS obfuscated/bHo org/schema/schine/resource/ResourceLoader
 	FIELD a resourceManager Lobfuscated/y;
