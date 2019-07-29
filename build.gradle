@@ -7,10 +7,10 @@ buildscript {
 		}
 	}
 	dependencies {
-		classpath "net.fabricmc:weave:0.3.0.+"
-		classpath "net.fabricmc:stitch:0.1.1.43"
-		classpath "commons-io:commons-io:1.4"
-		classpath "com.google.guava:guava:19.0"
+		classpath "cuchaz:enigma:0.14.0.122"
+		classpath "net.fabricmc:stitch:0.2.0.52"
+		classpath "commons-io:commons-io:2.6"
+		classpath "com.google.guava:guava:28.0-jre"
 		classpath 'de.undercouch:gradle-download-task:3.4.3'
 		classpath 'net.fabricmc:tiny-remapper:+'
 	}
@@ -49,14 +49,19 @@ configurations {
 }
 
 dependencies {
-	enigmaRuntime "net.fabricmc:stitch:0.1.1.39+"
-	enigmaRuntime "cuchaz:enigma:0.13.1.+:all"
+	enigmaRuntime "net.fabricmc:stitch:0.2.0.52"
+	enigmaRuntime "cuchaz:enigma:0.14.0.122:all"
 }
 
+def setupGroup = "jar setup"
+def yarnGroup = "yarn"
+def buildMappingGroup = "mapping build"
+def mapJarGroup = "jar mapping"
 def mappingsDir = file("mappings")
 def cacheFilesStarMade = file(".gradle/starmade")
 def tempDir = file(".gradle/temp")
 def intermediaryJar = file("${project.starMadeVersion}-intermediary.jar")
+def yarnJar = file("${project.starMadeVersion}-yarn.jar")
 def namedJar = file("${project.starMadeVersion}-named.jar")
 def checksumsFile = new File(cacheFilesStarMade, "${project.starMadeVersion}_checksums.lst")
 def gameJar = new File(cacheFilesStarMade, "${project.starMadeVersion}.jar")
@@ -65,24 +70,27 @@ def libs = new File("build/libs/")
 
 ext.baseUrl = new URL("http://files.star-made.org/")
 
-import groovy.json.JsonSlurper
-import org.apache.commons.io.FileUtils
+import cuchaz.enigma.command.CheckMappingsCommand
+import cuchaz.enigma.command.ConvertMappingsCommand
 import com.google.common.hash.Hashing
 import com.google.common.io.Files
+import com.google.common.net.UrlEscapers
+import groovy.io.FileType
+import groovy.json.JsonSlurper
 import net.fabricmc.stitch.commands.CommandMergeTiny
+import net.fabricmc.stitch.commands.CommandProposeFieldNames
+import net.fabricmc.stitch.commands.CommandRewriteIntermediary
 import net.fabricmc.stitch.merge.JarMerger
 import net.fabricmc.tinyremapper.OutputConsumerPath
 import net.fabricmc.tinyremapper.TinyRemapper
 import net.fabricmc.tinyremapper.TinyUtils
-import net.fabricmc.weave.CommandTinyify
-import net.fabricmc.weave.CommandFindMappingErrors
-import groovy.io.FileType
+import org.apache.commons.io.FileUtils
 import java.util.zip.GZIPOutputStream
 import java.util.stream.Collectors
 
 boolean validateChecksum(File file, String checksum) {
 	if (file != null) {
-		def hash = Files.hash(file, Hashing.sha1())
+		def hash = Files.asByteSource(file).hash(Hashing.sha1())
 		def builder = new StringBuilder()
 		hash.asBytes().each {
 			builder.append(Integer.toString((it & 0xFF) + 0x100, 16).substring(1))
@@ -93,6 +101,7 @@ boolean validateChecksum(File file, String checksum) {
 }
 
 task downloadVersionsManifest(type: Download) {
+	group = setupGroup
 	inputs.property "date", java.time.LocalDate.now()
 
 	def manifestFile = new File(cacheFilesStarMade, "release_version_manifest.lst")
@@ -130,6 +139,7 @@ def getManifestVersion(File manifestFile, String starmade_version) {
 }
 
 task downloadWantedVersionManifest(dependsOn: downloadVersionsManifest) {
+	group = setupGroup
 	def manifestFile = downloadVersionsManifest.dest
 
 	outputs.file checksumsFile
@@ -151,6 +161,7 @@ task downloadWantedVersionManifest(dependsOn: downloadVersionsManifest) {
 }
 
 task downloadStarMadeJars(dependsOn: downloadWantedVersionManifest) {
+	group = setupGroup
 	def manifestFile = downloadVersionsManifest.dest
 
 	inputs.file checksumsFile
@@ -184,11 +195,13 @@ task downloadStarMadeJars(dependsOn: downloadWantedVersionManifest) {
 }
 
 task setupYarn(dependsOn: downloadStarMadeJars) {
-
+	group = yarnGroup
 }
 
 task yarn(dependsOn: setupYarn) {
+	group = yarnGroup
 	doLast {
+		ant.setLifecycleLogLevel "WARN"
 		ant.java(
 			classname: 'cuchaz.enigma.Main',
 			classpath: configurations.enigmaRuntime.asPath,
@@ -196,13 +209,18 @@ task yarn(dependsOn: setupYarn) {
 			spawn: true
 		) {
 			jvmarg(value: "-Xmx2048m")
+			arg(value: '-jar')
 			arg(value: gameJar.getAbsolutePath())
+			arg(value: '-mappings')
 			arg(value: mappingsDir.getAbsolutePath())
+			arg(value: '-profile')
+			arg(value: 'enigma_profile.json')
 		}
 	}
 }
 
 task buildEnigma(type: Zip) {
+	group = buildMappingGroup
 	from mappingsDir
 	include "**/*"
 	archiveName "yarn-enigma-${yarnVersion}.zip"
@@ -210,6 +228,7 @@ task buildEnigma(type: Zip) {
 }
 
 task checkMappings {
+	group = buildMappingGroup
 	inputs.dir mappingsDir
 	doLast {
 		logger.lifecycle(":checking mappings")
@@ -219,16 +238,42 @@ task checkMappings {
 			mappingsDir.getAbsolutePath()
 		]
 
-		new CommandFindMappingErrors().run(args)
+		new CheckMappingsCommand().run(args)
 	}
 }
 
 task downloadIntermediary(type: Download){
-	src "https://github.com/DistortSM/intermediary/raw/master/mappings/${project.starMadeVersion}.tiny"
+	group = buildMappingGroup
+	def url = "https://github.com/DistortSM/intermediary/raw/master/mappings/${project.starMadeVersion}.tiny"
+	src UrlEscapers.urlFragmentEscaper().escape(url)
 	dest new File(cacheFilesStarMade, "${project.starMadeVersion}-intermediary.tiny")
 }
 
+task patchIntermediary(dependsOn: ["downloadStarMadeJars", "downloadIntermediary"], type: FileOutput) {
+	group = buildMappingGroup
+	def intermediaryTinyInput = downloadIntermediary.dest
+
+	def outputFile = new File(cacheFilesMinecraft, "${project.starMadeVersion}-intermediary-full.tiny")
+	outputs.file(outputFile)
+	fileOutput = outputFile
+
+	outputs.upToDateWhen {false}
+
+	doLast {
+		logger.lifecycle(":patching intermediary")
+		String[] args = [
+			mergedFile.getAbsolutePath(),
+			intermediaryTinyInput.getAbsolutePath(),
+			outputFile.getAbsolutePath(),
+			"--writeAll"
+		]
+
+		new CommandRewriteIntermediary().run(args)
+	}
+}
+
 task buildYarnTiny(dependsOn: "downloadStarMadeJars", type: FileOutput) {
+	group = buildMappingGroup
 	inputs.dir mappingsDir
 	if (!libs.exists()) {
 		libs.mkdirs()
@@ -237,39 +282,39 @@ task buildYarnTiny(dependsOn: "downloadStarMadeJars", type: FileOutput) {
 	def yarnTiny = new File(tempDir, "yarn-mappings.tiny")
 	fileOutput = yarnTiny
 
-	outputs.upToDateWhen {return false}
+	outputs.upToDateWhen {false}
 
 	doLast {
 		logger.lifecycle(":generating tiny mappings")
 
 		String[] args = [
-			gameJar.getAbsolutePath(),
+			"enigma",
 			mappingsDir.getAbsolutePath(),
-			yarnTiny.getAbsolutePath(),
-			"official",
-			"named"
+			"tiny:official:named",
+			yarnTiny.getAbsolutePath()
 		]
 
-		new CommandTinyify().run(args)
+		new ConvertMappingsCommand().run(args)
 	}
 }
 
-task mergeTiny(dependsOn: ["buildYarnTiny", "downloadIntermediary"], type: FileOutput) {
+task mergeTiny(dependsOn: ["buildYarnTiny", "patchIntermediary"], type: FileOutput) {
+	group = buildMappingGroup
 	def yarnTinyInput = buildYarnTiny.fileOutput
-	def intermediaryTinyInput = downloadIntermediary.dest
+	def intermediaryTinyInput = patchIntermediary.dest
 
-	def outputFile = new File(tempDir, "mappings.tiny")
-	outputs.file(outputFile)
-	fileOutput = outputFile
+	def resultMappings = new File(tempDir, "mappings.tiny")
+	outputs.file(resultMappings)
+	fileOutput = resultMappings
 
-	outputs.upToDateWhen {return false}
+	outputs.upToDateWhen {false}
 
 	doLast {
 		logger.lifecycle(":merging yarn and intermediary")
 		String[] args = [
 			yarnTinyInput.getAbsolutePath(),
 			intermediaryTinyInput.getAbsolutePath(),
-			outputFile.getAbsolutePath(),
+			resultMappings.getAbsolutePath(),
 			"intermediary",
 			"official"
 		]
@@ -279,7 +324,8 @@ task mergeTiny(dependsOn: ["buildYarnTiny", "downloadIntermediary"], type: FileO
 }
 
 task tinyJar(type: Jar, dependsOn: "mergeTiny") {
-	outputs.upToDateWhen {return false}
+	group = buildMappingGroup
+	outputs.upToDateWhen {false}
 	archiveName = "yarn-${yarnVersion}.jar"
 	destinationDir(file("build/libs"))
 	classifier = ""
@@ -289,13 +335,14 @@ task tinyJar(type: Jar, dependsOn: "mergeTiny") {
 }
 
 task compressTiny(dependsOn: ["tinyJar", "mergeTiny"], type: FileOutput){
+	group = buildMappingGroup
 	def outputFile = new File(libs, "yarn-tiny-${yarnVersion}.gz")
 	outputs.file(outputFile)
 	fileOutput = outputFile
 
 	def inputFile = mergeTiny.fileOutput
 
-	outputs.upToDateWhen {return false}
+	outputs.upToDateWhen {false}
 
 	doLast {
 		logger.lifecycle(":compressing tiny mappings")
@@ -313,7 +360,6 @@ task compressTiny(dependsOn: ["tinyJar", "mergeTiny"], type: FileOutput){
 		fileInputStream.close()
 		outputStream.finish()
 		outputStream.close()
-		inputFile.delete()
 	}
 }
 
@@ -326,15 +372,14 @@ tasks.build.dependsOn "buildEnigma"
 tasks.build.dependsOn "tinyJar"
 
 task downloadStarMadeLibs(dependsOn: downloadWantedVersionManifest) {
+	group = setupGroup
 	def manifestFile = downloadVersionsManifest.dest
 
 	inputs.files checksumsFile
 
 	outputs.file(libraries)
 
-	outputs.upToDateWhen {
-		return false
-	}
+	outputs.upToDateWhen {false}
 
 	doLast {
 		def manifestVersion = getManifestVersion(manifestFile, project.starMadeVersion)
@@ -381,13 +426,12 @@ task downloadStarMadeLibs(dependsOn: downloadWantedVersionManifest) {
 }
 
 task mapIntermediaryJar(dependsOn: [downloadStarMadeLibs, build]) {
+	group = setupGroup
 	inputs.files downloadStarMadeLibs.outputs.files.files
 	outputs.file intermediaryJar
 
 	//Force the task to always run
-	outputs.upToDateWhen {
-		return false
-	}
+	outputs.upToDateWhen {false}
 
 	doLast {
 		logger.lifecycle(": Mapping StarMade to intermdiary")
@@ -396,20 +440,55 @@ task mapIntermediaryJar(dependsOn: [downloadStarMadeLibs, build]) {
 	}
 }
 
-task mapNamedJar(dependsOn: mapIntermediaryJar) {
+task mapYarnJar(dependsOn: mapIntermediaryJar) {
+	group = mapJarGroup
+	inputs.files downloadStarMadeLibs.outputs.files.files
+	outputs.file(yarnJar)
+
+	//Force the task to always run
+	outputs.upToDateWhen {false}
+
+	doLast {
+		logger.lifecycle(":mapping starmade to yarn")
+
+		def tinyInput = new File("build/libs/yarn-tiny-${yarnVersion}.gz")
+		mapJar(yarnJar, intermediaryJar, tinyInput, libraries, "intermediary", "named")
+	}
+}
+
+task buildTinyWithEnum(dependsOn: "mergeTiny", type: FileOutput) {
+	group = buildMappingGroup
+	def noEnum = mergeTiny.fileOutput
+	def namedWithEnum = new File(tempDir, "named-with-enum.tiny")
+	fileOutput = namedWithEnum
+
+	outputs.upToDateWhen { false }
+
+	doLast {
+		logger.lifecycle(":seeking auto-mappable fields")
+		String[] argsPropose = [
+			mergedFile.getAbsolutePath(), // must use official jar
+			noEnum.getAbsolutePath(),
+			namedWithEnum.getAbsolutePath(),
+			"--writeAll"
+		]
+
+		new CommandProposeFieldNames().run(argsPropose)
+	}
+}
+
+task mapNamedJar(dependsOn: [buildTinyWithEnum, mapIntermediaryJar]) {
+	group = mapJarGroup
 	inputs.files downloadStarMadeLibs.outputs.files.files
 	outputs.file(namedJar)
 
 	//Force the task to always run
-	outputs.upToDateWhen {
-		return false
-	}
+	outputs.upToDateWhen {false}
 
 	doLast {
 		logger.lifecycle(":mapping minecraft to named")
 
-		def tinyInput = new File("build/libs/yarn-tiny-${yarnVersion}.gz")
-		mapJar(namedJar, intermediaryJar, tinyInput, libraries, "intermediary", "named")
+		mapJar(namedJar, intermediaryJar, buildTinyWithEnum.fileOutput, libraries, "intermediary", "named")
 	}
 }
 
@@ -458,17 +537,17 @@ void mapJar(File output, File input, File mappings, File libraries, String from,
 	try {
 		def outputConsumer = new OutputConsumerPath(output.toPath())
 		outputConsumer.addNonClassFiles(input.toPath())
-		remapper.read(input.toPath())
+		remapper.readInputs(input.toPath())
 
 		libraries.eachFileRecurse(FileType.FILES) {file ->
-			remapper.read(file.toPath())
+			remapper.readClassPath(file.toPath())
 		}
-		remapper.apply(input.toPath(), outputConsumer)
+		remapper.apply(outputConsumer)
 		outputConsumer.close()
 		remapper.finish()
 	} catch (Exception e) {
 		remapper.finish()
-		throw new RuntimeException("Failed to remap jar", e);
+		throw new RuntimeException("Failed to remap jar", e)
 	}
 }
 
