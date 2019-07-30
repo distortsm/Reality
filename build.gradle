@@ -12,13 +12,13 @@ buildscript {
 		classpath "net.fabricmc:stitch:0.2.1.61"
 		classpath "commons-io:commons-io:2.6"
 		classpath "com.google.guava:guava:28.0-jre"
-		classpath 'de.undercouch:gradle-download-task:3.4.3'
+		classpath 'de.undercouch:gradle-download-task:4.0.0'
 		classpath 'net.fabricmc:tiny-remapper:+'
 	}
 }
 
 plugins {
-	id 'de.undercouch.download' version '3.4.3'
+	id 'de.undercouch.download' version '4.0.0'
 	id 'maven'
 	id 'maven-publish'
 }
@@ -236,6 +236,27 @@ task downloadStarMadeLibs(dependsOn: downloadWantedVersionManifest) {
 			.filter { it.endsWith(".jar") && !it.endsWith("./StarMade.jar") }
 			.collect Collectors.toList()
 
+		// Delete libaries with mismatched checksums
+		version.stream()
+			.map { it.tokenize(" ") }
+			.filter { it[0].endsWith(".jar") && !it[0].equals("./StarMade.jar") }
+			.each {
+				def library = new File(libraries, it[0].substring(it[0].lastIndexOf("/") + 1))
+				def libraryChecksum = it[2]
+				try {
+					verifyChecksum {
+						src library
+						algorithm "sha1"
+						checksum libraryChecksum
+					}
+
+				}
+				catch (GradleException ex) {
+					library.delete()
+				}
+			}
+
+		// Downlaod any missing libaries
 		download {
 			src libraryUrls
 			dest libraries
@@ -244,6 +265,7 @@ task downloadStarMadeLibs(dependsOn: downloadWantedVersionManifest) {
 
 		logger.lifecycle(": Verifying StarMade library checksums")
 
+		// Verify the library's checksums
 		version.stream()
 			.map { it.tokenize(" ") }
 			.filter { it[0].endsWith(".jar") && !it[0].equals("./StarMade.jar") }
@@ -264,7 +286,7 @@ task invertIntermediary(dependsOn: ["downloadIntermediary"], type: FileOutput) {
 	group = buildMappingGroup
 	def inputFile = downloadIntermediary.dest
 
-	def outputFile = new File(cacheFilesMinecraft, "${project.starMadeVersion}-intermediary-inverted.tiny")
+	def outputFile = new File(cacheFilesStarMade, "${project.starMadeVersion}-intermediary-inverted.tiny")
 	outputs.file(outputFile)
 	fileOutput = outputFile
 
@@ -274,6 +296,7 @@ task invertIntermediary(dependsOn: ["downloadIntermediary"], type: FileOutput) {
 		logger.lifecycle(":building inverted intermediary")
 		String[] args = [
 			inputFile.getAbsolutePath(),
+			outputFile.getAbsolutePath(),
 			"intermediary", "official"
 		]
 
@@ -285,7 +308,7 @@ task patchIntermediary(dependsOn: ["downloadStarMadeJars", "downloadIntermediary
 	group = buildMappingGroup
 	def intermediaryTinyInput = downloadIntermediary.dest
 
-	def outputFile = new File(cacheFilesMinecraft, "${project.starMadeVersion}-intermediary-full.tiny")
+	def outputFile = new File(cacheFilesStarMade, "${project.starMadeVersion}-intermediary-full.tiny")
 	outputs.file(outputFile)
 	fileOutput = outputFile
 
@@ -396,7 +419,7 @@ task buildYarnTiny(dependsOn: "downloadStarMadeJars", type: FileOutput) {
 task mergeTiny(dependsOn: ["buildYarnTiny", "invertIntermediary"], type: FileOutput) {
 	group = buildMappingGroup
 	def yarnTinyInput = buildYarnTiny.fileOutput
-	def intermediaryTinyInput = invertIntermediary.dest
+	def intermediaryTinyInput = invertIntermediary.fileOutput
 
 	def unorderedResultMappings = new File(tempDir, "mappings-unordered.tiny")
 	def resultMappings = new File(tempDir, "mappings.tiny")
